@@ -127,6 +127,26 @@ Suggested loop with Crabyard:
 4. Use Crabyard for planning, status, verify, sync, and archive.
 5. Re-run graphify after meaningful code or spec changes so the graph stays useful for the next session.
 
+Practical workflow:
+
+1. `research` or `explore`
+   Start from `graphify-out/GRAPH_REPORT.md` or `graphify-out/wiki/index.md` to understand the current architecture, likely god nodes, and cross-cutting dependencies before reading raw files.
+2. `plan`
+   Once the graph narrows the search space, move into the relevant `crabyard/changes/<slug>/` bundle and `crabyard/specs/`. Use graphify for orientation, but use Crabyard artifacts as the planning truth.
+3. `apply`
+   Implement from the Crabyard execution plan. If the work stays local and the graph still matches reality, keep moving. If the change reshapes architecture, shared interfaces, or accepted specs, update the graph before the next major decision point.
+4. `review` or `debug`
+   Use graphify again to inspect impact radius, community boundaries, and non-obvious neighbors. Then verify concrete correctness against code, tests, staged specs, and Crabyard knowledge notes.
+5. `verify`, `sync`, `archive`
+   These remain Crabyard responsibilities. graphify helps you understand the repo; it does not replace execution truth, verification gates, or accepted-truth sync.
+
+When to refresh graphify outputs:
+
+- Do refresh after meaningful changes to architecture, interfaces, `crabyard/specs/`, `crabyard/knowledge/`, or the active change bundle.
+- Do refresh before a new deep `explore`, `review`, or `debug` session if the previous graph is stale.
+- Do not treat `graphify-out/wiki/` as hand-maintained documentation. The wiki is a derived view of the graph.
+- Do not re-run `--wiki` after every tiny code edit. What matters is keeping the graph reasonably fresh at decision points, not regenerating every artifact on every save.
+
 🦀🦀🦀
 
 **Always-on vs explicit trigger — what's the difference?**
