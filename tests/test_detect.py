@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from graphify.detect import classify_file, count_words, detect, FileType, _looks_like_paper, _is_ignored, _load_graphifyignore
 
@@ -11,6 +12,10 @@ def test_classify_typescript():
 
 def test_classify_markdown():
     assert classify_file(Path("README.md")) == FileType.DOCUMENT
+
+def test_classify_yaml_as_document():
+    assert classify_file(Path("execution.yaml")) == FileType.DOCUMENT
+    assert classify_file(Path("manifest.yml")) == FileType.DOCUMENT
 
 def test_classify_pdf():
     assert classify_file(Path("paper.pdf")) == FileType.PAPER
@@ -146,3 +151,53 @@ def test_detect_handles_circular_symlinks(tmp_path):
 
     result = detect(tmp_path, follow_symlinks=True)
     assert any("main.py" in f for f in result["files"]["code"])
+
+
+def test_detect_crabyard_repo_mode_prioritizes_active_change_specs_and_knowledge(tmp_path):
+    crabyard = tmp_path / "crabyard"
+    (crabyard / "specs").mkdir(parents=True)
+    (crabyard / "knowledge").mkdir(parents=True)
+    (crabyard / "changes" / "older-change" / "specs").mkdir(parents=True)
+    (crabyard / "changes" / "active-change" / "specs").mkdir(parents=True)
+    (crabyard / "manifest.yaml").write_text("version: 1\n")
+
+    (tmp_path / "README.md").write_text("# Root\n")
+    (crabyard / "specs" / "api.md").write_text("# API\n")
+    (crabyard / "knowledge" / "auth.md").write_text("# Auth note\n")
+    (crabyard / "changes" / "older-change" / "tasks.md").write_text("# Older\n")
+    (crabyard / "changes" / "active-change" / "proposal.md").write_text("# Proposal\n")
+    (crabyard / "changes" / "active-change" / "execution.yaml").write_text("version: 1\n")
+    (crabyard / "changes" / "active-change" / "specs" / "auth.md").write_text("# Staged auth\n")
+
+    os.utime(crabyard / "changes" / "older-change" / "tasks.md", (1, 1))
+    os.utime(crabyard / "changes" / "active-change" / "proposal.md", None)
+
+    result = detect(tmp_path)
+
+    assert result["repo_mode"] == "crabyard"
+    assert result["active_change"]["name"] == "active-change"
+    assert result["priority_counts"]["document"] >= 4
+    assert result["files"]["document"][0].endswith("crabyard/changes/active-change/execution.yaml")
+    assert any(path.endswith("crabyard/specs/api.md") for path in result["priority_files"])
+    assert any(path.endswith("crabyard/knowledge/auth.md") for path in result["priority_files"])
+    readme_index = next(i for i, path in enumerate(result["files"]["document"]) if path.endswith("README.md"))
+    specs_index = next(i for i, path in enumerate(result["files"]["document"]) if path.endswith("crabyard/specs/api.md"))
+    knowledge_index = next(i for i, path in enumerate(result["files"]["document"]) if path.endswith("crabyard/knowledge/auth.md"))
+    assert specs_index < readme_index
+    assert knowledge_index < readme_index
+
+
+def test_detect_can_disable_crabyard_repo_mode(tmp_path):
+    crabyard = tmp_path / "crabyard"
+    (crabyard / "specs").mkdir(parents=True)
+    (crabyard / "changes").mkdir(parents=True)
+    (crabyard / "knowledge").mkdir(parents=True)
+    (crabyard / "manifest.yaml").write_text("version: 1\n")
+    (tmp_path / "README.md").write_text("# Root\n")
+    (crabyard / "specs" / "api.md").write_text("# API\n")
+
+    result = detect(tmp_path, repo_mode="none")
+
+    assert result["repo_mode"] == "default"
+    assert result["priority_files"] == []
+    assert result["active_change"] is None

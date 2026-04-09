@@ -104,6 +104,25 @@ If the project looks like a [Crabyard](https://github.com/conscientiousness/crab
 
 Uninstall with the matching uninstall command (e.g. `graphify claude uninstall`).
 
+### Crabyard repo mode
+
+When you run graphify on a repo root that contains `crabyard/manifest.yaml`, graphify now auto-enables a Crabyard repo mode during detection:
+
+- active change bundle files are prioritized first
+- `crabyard/specs/` is prioritized next
+- `crabyard/knowledge/` is prioritized after that
+- `.yaml` and `.yml` files are treated as documents, so `execution.yaml` and manifest files are graphable
+
+This does not exclude the rest of the repo. It changes detection order and extraction focus so the earliest graph context is aligned with current Crabyard work.
+
+Suggested loop with Crabyard:
+
+1. Run `graphify . --wiki` at the repo root.
+2. Start with `graphify-out/GRAPH_REPORT.md` or `graphify-out/wiki/index.md` for architecture orientation.
+3. For current work, reconcile what the graph suggests against `crabyard/changes/<slug>/`, `crabyard/specs/`, and `crabyard/knowledge/`.
+4. Use Crabyard for planning, status, verify, sync, and archive.
+5. Re-run graphify after meaningful code or spec changes so the graph stays useful for the next session.
+
 **Always-on vs explicit trigger — what's the difference?**
 
 The always-on hook surfaces `GRAPH_REPORT.md` — a one-page summary of god nodes, communities, and surprising connections. Your assistant reads this before searching files, so it navigates by structure instead of keyword matching. That covers most everyday questions.

@@ -12,7 +12,7 @@ Turn any folder of files into a navigable knowledge graph with community detecti
 
 ```
 /graphify                                             # full pipeline on current directory → Obsidian vault
-/graphify <path>                                      # full pipeline on specific path
+/graphify <path>                                      # full pipeline on specific path; auto-detects Crabyard repos at repo root and prioritizes active change + specs + knowledge
 /graphify <path> --mode deep                          # thorough extraction, richer INFERRED edges
 /graphify <path> --update                             # incremental - re-extract only new/changed files
 /graphify <path> --cluster-only                       # rerun clustering on existing graph
@@ -85,7 +85,7 @@ $(cat .graphify_python) -c "
 import json
 from graphify.detect import detect
 from pathlib import Path
-result = detect(Path('INPUT_PATH'))
+result = detect(Path('INPUT_PATH'), repo_mode='auto')
 print(json.dumps(result))
 " > .graphify_detect.json
 ```
@@ -103,6 +103,7 @@ Corpus: X files · ~Y words
 Then act on it:
 - If `total_files` is 0: stop with "No supported files found in [path]."
 - If `skipped_sensitive` is non-empty: mention file count skipped, not the file names.
+- If `repo_mode` is `crabyard`: print the selected active change if present, the focus roots, and the number of prioritized files before proceeding.
 - If `total_words` > 2,000,000 OR `total_files` > 200: show the warning and the top 5 subdirectories by file count, then ask which subfolder to run on. Wait for the user's answer before proceeding.
 - Otherwise: proceed directly to Step 3 - no need to ask anything.
 
@@ -181,6 +182,8 @@ Only dispatch subagents for files listed in `.graphify_uncached.txt`. If all fil
 **Step B1 - Split into chunks**
 
 Load files from `.graphify_uncached.txt`. Split into chunks of 20-25 files each. Each image gets its own chunk (vision needs separate context). When splitting, group files from the same directory together so related artifacts land in the same chunk and cross-file relationships are more likely to be extracted.
+
+If `.graphify_detect.json` says `repo_mode` is `crabyard` and `priority_files` is non-empty, seed the earliest chunk with those `priority_files` first. Do not bury the active change bundle, `crabyard/specs/`, or `crabyard/knowledge/` in late chunks when earlier chunks still have room.
 
 **Step B2 - Dispatch ALL subagents in a single message (OpenCode)**
 

@@ -18,7 +18,7 @@ class FileType(str, Enum):
 _MANIFEST_PATH = "graphify-out/manifest.json"
 
 CODE_EXTENSIONS = {'.py', '.ts', '.js', '.jsx', '.tsx', '.go', '.rs', '.java', '.cpp', '.cc', '.cxx', '.c', '.h', '.hpp', '.rb', '.swift', '.kt', '.kts', '.cs', '.scala', '.php', '.lua', '.toc', '.zig', '.ps1', '.ex', '.exs', '.m', '.mm', '.jl'}
-DOC_EXTENSIONS = {'.md', '.txt', '.rst'}
+DOC_EXTENSIONS = {'.md', '.txt', '.rst', '.yaml', '.yml'}
 PAPER_EXTENSIONS = {'.pdf'}
 IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'}
 OFFICE_EXTENSIONS = {'.docx', '.xlsx'}
@@ -299,7 +299,133 @@ def _is_ignored(path: Path, root: Path, patterns: list[str]) -> bool:
     return False
 
 
-def detect(root: Path, *, follow_symlinks: bool = False) -> dict:
+def _is_within(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _looks_like_crabyard_repo(repo_root: Path) -> bool:
+    crabyard_root = repo_root / "crabyard"
+    if (crabyard_root / "manifest.yaml").exists():
+        return True
+    return (crabyard_root / "specs").is_dir() and (crabyard_root / "changes").is_dir()
+
+
+def _tree_mtime(path: Path) -> float:
+    latest = 0.0
+    try:
+        latest = path.stat().st_mtime
+    except OSError:
+        return latest
+    for child in path.rglob("*"):
+        try:
+            latest = max(latest, child.stat().st_mtime)
+        except OSError:
+            continue
+    return latest
+
+
+def _detect_crabyard_context(root: Path) -> dict | None:
+    repo_root = root.resolve()
+    if not _looks_like_crabyard_repo(repo_root):
+        return None
+
+    crabyard_root = repo_root / "crabyard"
+    changes_root = crabyard_root / "changes"
+    candidates = [
+        path for path in changes_root.iterdir()
+        if path.is_dir() and path.name != "archive" and not path.name.startswith(".")
+    ] if changes_root.exists() else []
+    candidates.sort(key=lambda path: (-_tree_mtime(path), path.name))
+
+    active_change = None
+    if candidates:
+        selected = candidates[0]
+        active_change = {
+            "name": selected.name,
+            "path": str(selected),
+            "selection_reason": (
+                "only active change bundle found"
+                if len(candidates) == 1
+                else "most recently modified active change bundle"
+            ),
+            "candidates": [path.name for path in candidates],
+        }
+
+    return {
+        "repo_root": str(repo_root),
+        "specs_root": str(crabyard_root / "specs"),
+        "knowledge_root": str(crabyard_root / "knowledge"),
+        "active_change": active_change,
+    }
+
+
+def _priority_rank(path: Path, context: dict | None) -> int:
+    if not context:
+        return 3
+
+    active = context.get("active_change")
+    if active and _is_within(path, Path(active["path"])):
+        return 0
+    if _is_within(path, Path(context["specs_root"])):
+        return 1
+    if _is_within(path, Path(context["knowledge_root"])):
+        return 2
+    return 3
+
+
+def _apply_repo_priority(files: dict[FileType, list[str]], context: dict | None) -> tuple[dict[FileType, list[str]], dict]:
+    if not context:
+        return files, {
+            "repo_mode": "default",
+            "priority_files": [],
+            "priority_counts": {ftype.value: 0 for ftype in files},
+            "active_change": None,
+            "focus_paths": [],
+        }
+
+    ordered: dict[FileType, list[str]] = {}
+    priority_file_pool: list[str] = []
+    priority_counts: dict[str, int] = {}
+
+    for ftype, file_list in files.items():
+        sorted_files = sorted(
+            file_list,
+            key=lambda raw: (_priority_rank(Path(raw), context), str(Path(raw).resolve())),
+        )
+        ordered[ftype] = sorted_files
+        bucket = [raw for raw in sorted_files if _priority_rank(Path(raw), context) < 3]
+        priority_file_pool.extend(bucket)
+        priority_counts[ftype.value] = len(bucket)
+
+    priority_files = sorted(
+        priority_file_pool,
+        key=lambda raw: (_priority_rank(Path(raw), context), str(Path(raw).resolve())),
+    )
+
+    focus_paths = []
+    active = context.get("active_change")
+    if active:
+        focus_paths.append(active["path"])
+    focus_paths.extend([context["specs_root"], context["knowledge_root"]])
+
+    return ordered, {
+        "repo_mode": "crabyard",
+        "priority_files": priority_files,
+        "priority_counts": priority_counts,
+        "active_change": active,
+        "focus_paths": focus_paths,
+    }
+
+
+def detect(root: Path, *, follow_symlinks: bool = False, repo_mode: str = "auto") -> dict:
+    if repo_mode not in {"auto", "default", "none", "crabyard"}:
+        raise ValueError(f"unknown repo_mode: {repo_mode}")
+
+    root = root.resolve()
     files: dict[FileType, list[str]] = {
         FileType.CODE: [],
         FileType.DOCUMENT: [],
@@ -377,6 +503,14 @@ def detect(root: Path, *, follow_symlinks: bool = False) -> dict:
             files[ftype].append(str(p))
             total_words += count_words(p)
 
+    repo_context = None
+    if repo_mode == "crabyard":
+        repo_context = _detect_crabyard_context(root)
+    elif repo_mode == "auto":
+        repo_context = _detect_crabyard_context(root)
+
+    files, repo_metadata = _apply_repo_priority(files, repo_context)
+
     total_files = sum(len(v) for v in files.values())
     needs_graph = total_words >= CORPUS_WARN_THRESHOLD
 
@@ -402,6 +536,11 @@ def detect(root: Path, *, follow_symlinks: bool = False) -> dict:
         "warning": warning,
         "skipped_sensitive": skipped_sensitive,
         "graphifyignore_patterns": len(ignore_patterns),
+        "repo_mode": repo_metadata["repo_mode"],
+        "priority_files": repo_metadata["priority_files"],
+        "priority_counts": repo_metadata["priority_counts"],
+        "focus_paths": repo_metadata["focus_paths"],
+        "active_change": repo_metadata["active_change"],
     }
 
 
