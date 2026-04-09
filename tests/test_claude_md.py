@@ -1,5 +1,6 @@
 """Tests for graphify claude install / uninstall commands."""
 from pathlib import Path
+import json
 import pytest
 from graphify.__main__ import claude_install, claude_uninstall, _CLAUDE_MD_MARKER, _CLAUDE_MD_SECTION
 
@@ -7,6 +8,15 @@ from graphify.__main__ import claude_install, claude_uninstall, _CLAUDE_MD_MARKE
 # ---------------------------------------------------------------------------
 # install
 # ---------------------------------------------------------------------------
+
+
+def _make_crabyard_repo(tmp_path):
+    crabyard_root = tmp_path / "crabyard"
+    (crabyard_root / "specs").mkdir(parents=True)
+    (crabyard_root / "changes").mkdir(parents=True)
+    (crabyard_root / "knowledge").mkdir(parents=True)
+    (crabyard_root / "manifest.yaml").write_text("version: 1\n")
+
 
 def test_install_creates_claude_md(tmp_path):
     """Creates CLAUDE.md when none exists."""
@@ -23,6 +33,21 @@ def test_install_contains_expected_rules(tmp_path):
     assert "GRAPH_REPORT.md" in content
     assert "wiki/index.md" in content
     assert "_rebuild_code" in content
+
+
+def test_install_adds_crabyard_guidance_when_repo_detected(tmp_path):
+    _make_crabyard_repo(tmp_path)
+    claude_install(tmp_path)
+    content = (tmp_path / "CLAUDE.md").read_text()
+    assert "retrieval accelerator" in content
+    assert "crabyard/specs/" in content
+    assert "crabyard/knowledge/" in content
+
+
+def test_install_omits_crabyard_guidance_in_generic_repo(tmp_path):
+    claude_install(tmp_path)
+    content = (tmp_path / "CLAUDE.md").read_text()
+    assert "crabyard/specs/" not in content
 
 
 def test_install_appends_to_existing_claude_md(tmp_path):
@@ -103,7 +128,6 @@ def test_uninstall_no_op_when_no_file(tmp_path, capsys):
 
 def test_install_creates_settings_json(tmp_path):
     """claude_install also writes .claude/settings.json with PreToolUse hook."""
-    import json
     claude_install(tmp_path)
     settings_path = tmp_path / ".claude" / "settings.json"
     assert settings_path.exists()
@@ -114,7 +138,6 @@ def test_install_creates_settings_json(tmp_path):
 
 def test_install_settings_json_idempotent(tmp_path):
     """Running claude_install twice does not duplicate the PreToolUse hook."""
-    import json
     claude_install(tmp_path)
     claude_install(tmp_path)
     settings_path = tmp_path / ".claude" / "settings.json"
@@ -124,9 +147,18 @@ def test_install_settings_json_idempotent(tmp_path):
     assert len(glob_grep_hooks) == 1
 
 
+def test_install_settings_json_mentions_crabyard_truth_hierarchy(tmp_path):
+    _make_crabyard_repo(tmp_path)
+    claude_install(tmp_path)
+    settings_path = tmp_path / ".claude" / "settings.json"
+    settings = json.loads(settings_path.read_text())
+    command = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    assert "crabyard/specs/" in command
+    assert "crabyard/changes/<slug>" in command
+
+
 def test_uninstall_removes_settings_hook(tmp_path):
     """claude_uninstall removes the PreToolUse hook from settings.json."""
-    import json
     claude_install(tmp_path)
     claude_uninstall(tmp_path)
     settings_path = tmp_path / ".claude" / "settings.json"

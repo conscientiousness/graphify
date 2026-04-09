@@ -1,6 +1,7 @@
 """Tests for graphify install --platform routing."""
 from pathlib import Path
 from unittest.mock import patch
+import json
 import pytest
 
 
@@ -121,6 +122,14 @@ def _agents_uninstall(tmp_path):
     _uninstall_fn(tmp_path)
 
 
+def _make_crabyard_repo(tmp_path):
+    crabyard_root = tmp_path / "crabyard"
+    (crabyard_root / "specs").mkdir(parents=True)
+    (crabyard_root / "changes").mkdir(parents=True)
+    (crabyard_root / "knowledge").mkdir(parents=True)
+    (crabyard_root / "manifest.yaml").write_text("version: 1\n")
+
+
 def test_codex_agents_install_writes_agents_md(tmp_path):
     _agents_install(tmp_path, "codex")
     agents_md = tmp_path / "AGENTS.md"
@@ -155,6 +164,21 @@ def test_agents_install_appends_to_existing(tmp_path):
     content = agents_md.read_text()
     assert "Do not break things." in content
     assert "## graphify" in content
+
+
+def test_agents_install_detects_crabyard_repo(tmp_path):
+    _make_crabyard_repo(tmp_path)
+    _agents_install(tmp_path, "codex")
+    content = (tmp_path / "AGENTS.md").read_text()
+    assert "retrieval accelerator" in content
+    assert "crabyard/specs/" in content
+    assert "crabyard/changes/<slug>" in content
+
+
+def test_agents_install_omits_crabyard_guidance_for_generic_repo(tmp_path):
+    _agents_install(tmp_path, "codex")
+    content = (tmp_path / "AGENTS.md").read_text()
+    assert "crabyard/specs/" not in content
 
 
 def test_agents_uninstall_removes_section(tmp_path):
@@ -201,6 +225,23 @@ def test_opencode_agents_install_registers_plugin_in_config(tmp_path):
     import json as _json
     config = _json.loads(config_file.read_text())
     assert any("graphify.js" in p for p in config.get("plugin", []))
+
+
+def test_codex_agents_install_writes_crabyard_aware_hook(tmp_path):
+    _make_crabyard_repo(tmp_path)
+    _agents_install(tmp_path, "codex")
+    hooks = json.loads((tmp_path / ".codex" / "hooks.json").read_text())
+    command = hooks["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    assert "crabyard/specs/" in command
+    assert "crabyard/changes/<slug>" in command
+
+
+def test_opencode_agents_install_writes_crabyard_aware_plugin(tmp_path):
+    _make_crabyard_repo(tmp_path)
+    _agents_install(tmp_path, "opencode")
+    plugin = (tmp_path / ".opencode" / "plugins" / "graphify.js").read_text()
+    assert "crabyard/specs/" in plugin
+    assert "crabyard/changes/<slug>" in plugin
 
 
 def test_opencode_agents_install_merges_existing_config(tmp_path):

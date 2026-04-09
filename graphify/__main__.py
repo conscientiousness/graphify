@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import platform
 import re
+import shlex
 import shutil
 import sys
 from pathlib import Path
@@ -22,20 +23,6 @@ def _check_skill_version(skill_dst: Path) -> None:
     installed = version_file.read_text(encoding="utf-8").strip()
     if installed != __version__:
         print(f"  warning: skill is from graphify {installed}, package is {__version__}. Run 'graphify install' to update.")
-
-_SETTINGS_HOOK = {
-    "matcher": "Glob|Grep",
-    "hooks": [
-        {
-            "type": "command",
-            "command": (
-                "[ -f graphify-out/graph.json ] && "
-                r"""echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"graphify: Knowledge graph exists. Read graphify-out/GRAPH_REPORT.md for god nodes and community structure before searching raw files."}}' """
-                "|| true"
-            ),
-        }
-    ],
-}
 
 _SKILL_REGISTRATION = (
     "\n# graphify\n"
@@ -132,7 +119,7 @@ def install(platform: str = "claude") -> None:
     print()
 
 
-_CLAUDE_MD_SECTION = """\
+_BASE_SECTION = """\
 ## graphify
 
 This project has a graphify knowledge graph at graphify-out/.
@@ -142,50 +129,133 @@ Rules:
 - If graphify-out/wiki/index.md exists, navigate it instead of reading raw files
 - After modifying code files in this session, run `python3 -c "from graphify.watch import _rebuild_code; from pathlib import Path; _rebuild_code(Path('.'))"` to keep the graph current
 """
+
+_CRABYARD_RULES = (
+    "- If this repo uses Crabyard, treat the graph as a retrieval accelerator, not the source of truth\n"
+    "- For accepted product behavior, prefer crabyard/specs/\n"
+    "- For in-flight changes, inspect the relevant crabyard/changes/<slug>/ bundle before editing\n"
+    "- For durable implementation notes, prefer crabyard/knowledge/\n"
+    "- Reconcile graph-derived conclusions against Crabyard artifacts and current code before making changes\n"
+)
+
+_BASE_HOOK_MESSAGE = (
+    "graphify: Knowledge graph exists. Read graphify-out/wiki/index.md or "
+    "graphify-out/GRAPH_REPORT.md before searching raw files."
+)
+_CRABYARD_HOOK_SUFFIX = (
+    " In Crabyard repos, treat crabyard/specs/ and the relevant "
+    "crabyard/changes/<slug>/ bundle as truth before acting."
+)
+
+
+def _is_crabyard_repo(project_dir: Path) -> bool:
+    """Best-effort detection of a Crabyard-managed repo without depending on Crabyard."""
+    crabyard_root = project_dir / "crabyard"
+    if (crabyard_root / "manifest.yaml").exists():
+        return True
+    return (crabyard_root / "specs").exists() and (crabyard_root / "changes").exists()
+
+
+def _build_section(project_dir: Path) -> str:
+    section = _BASE_SECTION
+    if _is_crabyard_repo(project_dir):
+        section += _CRABYARD_RULES
+    return section
+
+
+def _build_hook_message(project_dir: Path) -> str:
+    message = _BASE_HOOK_MESSAGE
+    if _is_crabyard_repo(project_dir):
+        message += _CRABYARD_HOOK_SUFFIX
+    return message
+
+
+def _build_settings_hook(project_dir: Path) -> dict:
+    payload = json.dumps(
+        {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "additionalContext": _build_hook_message(project_dir),
+            }
+        },
+        separators=(",", ":"),
+    )
+    return {
+        "matcher": "Glob|Grep",
+        "hooks": [
+            {
+                "type": "command",
+                "command": f"[ -f graphify-out/graph.json ] && echo {shlex.quote(payload)} || true",
+            }
+        ],
+    }
+
+
+def _build_codex_hook(project_dir: Path) -> dict:
+    payload = json.dumps(
+        {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+            },
+            "systemMessage": _build_hook_message(project_dir),
+        },
+        separators=(",", ":"),
+    )
+    return {
+        "hooks": {
+            "PreToolUse": [
+                {
+                    "matcher": "Bash",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": f"[ -f graphify-out/graph.json ] && echo {shlex.quote(payload)} || true",
+                        }
+                    ],
+                }
+            ]
+        }
+    }
+
+
+def _build_opencode_plugin(project_dir: Path) -> str:
+    reminder = f"[graphify] {_build_hook_message(project_dir)}"
+    return f"""\
+// graphify OpenCode plugin
+// Injects a knowledge graph reminder before bash tool calls when the graph exists.
+import {{ existsSync }} from "fs";
+import {{ join }} from "path";
+
+export const GraphifyPlugin = async ({{ directory }}) => {{
+  let reminded = false;
+  const reminder = {json.dumps(reminder)};
+
+  return {{
+    "tool.execute.before": async (input, output) => {{
+      if (reminded) return;
+      if (!existsSync(join(directory, "graphify-out", "graph.json"))) return;
+
+      if (input.tool === "bash") {{
+        output.args.command =
+          `printf '%s\\n' ${{JSON.stringify(reminder)}} && ` + output.args.command;
+        reminded = true;
+      }}
+    }},
+  }};
+}};
+"""
+
+
+_CLAUDE_MD_SECTION = _BASE_SECTION
 
 _CLAUDE_MD_MARKER = "## graphify"
 
 # AGENTS.md section for Codex, OpenCode, and OpenClaw.
 # All three platforms read AGENTS.md in the project root for persistent instructions.
-_AGENTS_MD_SECTION = """\
-## graphify
-
-This project has a graphify knowledge graph at graphify-out/.
-
-Rules:
-- Before answering architecture or codebase questions, read graphify-out/GRAPH_REPORT.md for god nodes and community structure
-- If graphify-out/wiki/index.md exists, navigate it instead of reading raw files
-- After modifying code files in this session, run `python3 -c "from graphify.watch import _rebuild_code; from pathlib import Path; _rebuild_code(Path('.'))"` to keep the graph current
-"""
+_AGENTS_MD_SECTION = _BASE_SECTION
 
 _AGENTS_MD_MARKER = "## graphify"
-
-# OpenCode tool.execute.before plugin — fires before every tool call.
-# Injects a graph reminder into bash command output when graph.json exists.
-_OPENCODE_PLUGIN_JS = """\
-// graphify OpenCode plugin
-// Injects a knowledge graph reminder before bash tool calls when the graph exists.
-import { existsSync } from "fs";
-import { join } from "path";
-
-export const GraphifyPlugin = async ({ directory }) => {
-  let reminded = false;
-
-  return {
-    "tool.execute.before": async (input, output) => {
-      if (reminded) return;
-      if (!existsSync(join(directory, "graphify-out", "graph.json"))) return;
-
-      if (input.tool === "bash") {
-        output.args.command =
-          'echo "[graphify] Knowledge graph available. Read graphify-out/GRAPH_REPORT.md for god nodes and architecture context before searching files." && ' +
-          output.args.command;
-        reminded = true;
-      }
-    },
-  };
-};
-"""
 
 _OPENCODE_PLUGIN_PATH = Path(".opencode") / "plugins" / "graphify.js"
 _OPENCODE_CONFIG_PATH = Path("opencode.json")
@@ -195,7 +265,7 @@ def _install_opencode_plugin(project_dir: Path) -> None:
     """Write graphify.js plugin and register it in opencode.json."""
     plugin_file = project_dir / _OPENCODE_PLUGIN_PATH
     plugin_file.parent.mkdir(parents=True, exist_ok=True)
-    plugin_file.write_text(_OPENCODE_PLUGIN_JS, encoding="utf-8")
+    plugin_file.write_text(_build_opencode_plugin(project_dir), encoding="utf-8")
     print(f"  {_OPENCODE_PLUGIN_PATH}  ->  tool.execute.before hook written")
 
     config_file = project_dir / _OPENCODE_CONFIG_PATH
@@ -241,27 +311,6 @@ def _uninstall_opencode_plugin(project_dir: Path) -> None:
         print(f"  {_OPENCODE_CONFIG_PATH}  ->  plugin deregistered")
 
 
-_CODEX_HOOK = {
-    "hooks": {
-        "PreToolUse": [
-            {
-                "matcher": "Bash",
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": (
-                            "[ -f graphify-out/graph.json ] && "
-                            r"""echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"},"systemMessage":"graphify: Knowledge graph exists. Read graphify-out/GRAPH_REPORT.md for god nodes and community structure before searching raw files."}' """
-                            "|| true"
-                        ),
-                    }
-                ],
-            }
-        ]
-    }
-}
-
-
 def _install_codex_hook(project_dir: Path) -> None:
     """Add graphify PreToolUse hook to .codex/hooks.json."""
     hooks_path = project_dir / ".codex" / "hooks.json"
@@ -280,7 +329,7 @@ def _install_codex_hook(project_dir: Path) -> None:
         print(f"  .codex/hooks.json  ->  hook already registered (no change)")
         return
 
-    pre_tool.extend(_CODEX_HOOK["hooks"]["PreToolUse"])
+    pre_tool.extend(_build_codex_hook(project_dir)["hooks"]["PreToolUse"])
     hooks_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
     print(f"  .codex/hooks.json  ->  PreToolUse hook registered")
 
@@ -304,15 +353,16 @@ def _uninstall_codex_hook(project_dir: Path) -> None:
 def _agents_install(project_dir: Path, platform: str) -> None:
     """Write the graphify section to the local AGENTS.md (Codex/OpenCode/OpenClaw)."""
     target = (project_dir or Path(".")) / "AGENTS.md"
+    section = _build_section(project_dir or Path("."))
 
     if target.exists():
         content = target.read_text(encoding="utf-8")
         if _AGENTS_MD_MARKER in content:
             print(f"graphify already configured in AGENTS.md")
             return
-        new_content = content.rstrip() + "\n\n" + _AGENTS_MD_SECTION
+        new_content = content.rstrip() + "\n\n" + section
     else:
-        new_content = _AGENTS_MD_SECTION
+        new_content = section
 
     target.write_text(new_content, encoding="utf-8")
     print(f"graphify section written to {target.resolve()}")
@@ -363,15 +413,16 @@ def _agents_uninstall(project_dir: Path) -> None:
 def claude_install(project_dir: Path | None = None) -> None:
     """Write the graphify section to the local CLAUDE.md."""
     target = (project_dir or Path(".")) / "CLAUDE.md"
+    section = _build_section(project_dir or Path("."))
 
     if target.exists():
         content = target.read_text(encoding="utf-8")
         if _CLAUDE_MD_MARKER in content:
             print("graphify already configured in CLAUDE.md")
             return
-        new_content = content.rstrip() + "\n\n" + _CLAUDE_MD_SECTION
+        new_content = content.rstrip() + "\n\n" + section
     else:
-        new_content = _CLAUDE_MD_SECTION
+        new_content = section
 
     target.write_text(new_content, encoding="utf-8")
     print(f"graphify section written to {target.resolve()}")
@@ -405,7 +456,7 @@ def _install_claude_hook(project_dir: Path) -> None:
         print(f"  .claude/settings.json  ->  hook already registered (no change)")
         return
 
-    pre_tool.append(_SETTINGS_HOOK)
+    pre_tool.append(_build_settings_hook(project_dir))
     settings_path.write_text(json.dumps(settings, indent=2), encoding="utf-8")
     print(f"  .claude/settings.json  ->  PreToolUse hook registered")
 

@@ -100,6 +100,8 @@ After building a graph, run this once in your project:
 
 **OpenClaw, Factory Droid, Trae** write the same rules to `AGENTS.md` in your project root. These platforms don't support tool hooks, so AGENTS.md is the always-on mechanism.
 
+If the project looks like a [Crabyard](https://github.com/conscientiousness/crabyard) repo (for example `crabyard/manifest.yaml` exists), `graphify * install` automatically adds a stricter truth hierarchy to the generated `AGENTS.md` or `CLAUDE.md`: use graphify for architecture navigation, but treat `crabyard/specs/`, the relevant `crabyard/changes/<slug>/` bundle, and `crabyard/knowledge/` as the sources to reconcile against before acting. This is detection-only. graphify does not require Crabyard, and Crabyard does not need to know graphify exists.
+
 Uninstall with the matching uninstall command (e.g. `graphify claude uninstall`).
 
 **Always-on vs explicit trigger — what's the difference?**
