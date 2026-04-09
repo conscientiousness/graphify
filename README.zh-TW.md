@@ -112,6 +112,26 @@ Codex 使用者還需要在 `~/.codex/config.toml` 的 `[features]` 下開啟 `m
 4. 規劃、狀態、驗證、同步與封存仍交給 Crabyard
 5. 在重要的程式碼或 spec 變更之後重新執行 graphify，讓下一次 session 仍然有可用的圖譜
 
+實戰 workflow：
+
+1. `research` 或 `explore`
+   先從 `graphify-out/GRAPH_REPORT.md` 或 `graphify-out/wiki/index.md` 開始，理解目前架構、可能的 god nodes，以及跨模組依賴，再去讀 raw files。
+2. `plan`
+   當 graph 已經幫你縮小搜尋面之後，回到相關的 `crabyard/changes/<slug>/` bundle 與 `crabyard/specs/`。graphify 用來做導覽，Crabyard artifacts 才是規劃時的 truth。
+3. `apply`
+   依照 Crabyard 的 execution plan 實作。如果變更仍然局部，且 graph 還沒有失真，就繼續往前；如果這次修改重塑了架構、共享介面或 accepted specs，就在下一個重要決策點前更新 graph。
+4. `review` 或 `debug`
+   再次使用 graphify 觀察 impact radius、community boundaries 與不明顯的鄰近模組。之後再回到 code、tests、staged specs 與 Crabyard knowledge notes 驗證具體正確性。
+5. `verify`、`sync`、`archive`
+   這些仍然是 Crabyard 的責任。graphify 幫你更快理解 repo，但不取代 execution truth、verification gates 或 accepted-truth sync。
+
+什麼時候該 refresh graphify outputs：
+
+- 當架構、介面、`crabyard/specs/`、`crabyard/knowledge/` 或 active change bundle 有明顯變更時，就更新。
+- 當你要開始新的深度 `explore`、`review` 或 `debug` session，而上一份 graph 已經過時時，就更新。
+- 不要把 `graphify-out/wiki/` 當成手動維護的文件。wiki 是 graph 的衍生視圖。
+- 不需要每次很小的 code edit 都重跑 `--wiki`。真正重要的是在決策點之前，讓 graph 保持合理新鮮，而不是每次儲存都重建所有衍生輸出。
+
 🦀🦀🦀
 
 解除安裝時使用對應平臺的 uninstall 命令即可（例如 `graphify claude uninstall`）。
